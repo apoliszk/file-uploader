@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Uploader</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="node_modules/rxjs/bundles/Rx.js"></script>
+    <style>
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+        }
+
+        #fileInputLabel {
+            display: block;
+            width: 80%;
+            height: 80%;
+            cursor: pointer;
+            box-sizing: border-box;
+            border: 9px dashed lightgray;
+
+            position: relative;
+            top: 10%;
+            left: 10%;
+        }
+
+        #fileInputLabel * {
+            position: absolute;
+        }
+
+        #fileInputLabel #selectBtn {
+            width: 144px;
+            height: 144px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-image: url(images/buttons.png);
+            background-position-y: 0;
+        }
+
+        #fileInputLabel:hover #selectBtn {
+            background-image: url(images/buttons.png);
+            background-position-y: -144px;
+        }
+
+        .uploading #fileInputLabel #selectBtn {
+            visibility: hidden;
+        }
+
+        #fileInputLabel #fileSelector {
+            visibility: hidden;
+        }
+
+        #fileInputLabel #progressBar {
+            background: #EEF7F9;
+            width: 100%;
+            bottom: 0;
+            transition: height 200ms;
+        }
+
+        #successInfo,
+        #failInfo {
+            position: absolute;
+            left: 50%;
+            top: 60%;
+            transform: translate(-50%, -50%);
+            font-size: 2em;
+            color: white;
+            border-radius: 1em;
+            padding: 1em;
+            visibility: hidden;
+            opacity: 0;
+            transition: all 200ms;
+        }
+
+        #successInfo.show,
+        #failInfo.show {
+            top: 50%;
+            opacity: 1;
+            visibility: visible;
+            box-shadow: 2px 2px 8px black;
+        }
+
+        #successInfo {
+            background: lightseagreen;
+        }
+
+        #failInfo {
+            background: lightcoral;
+        }
+
+        #mask {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            left: 0;
+            top: 0;
+            display: none;
+        }
+
+        .uploading #mask {
+            display: block;
+        }
+
+        #stopBtn {
+            cursor: pointer;
+            position: absolute;
+            width: 144px;
+            height: 144px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background-image: url(images/buttons.png);
+            background-position-y: -288px;
+        }
+
+        #stopBtn:hover {
+            background-image: url(images/buttons.png);
+            background-position-y: -432px;
+        }
+    </style>
+</head>
+
+<body>
+    <label id="fileInputLabel" ondragover="fileDragOverHandler(event)" ondrop="fileDropHandler(event)">
+        <input id="fileSelector" type="file" multiple>
+        <div id="progressBar"></div>
+        <div id="selectBtn"></div>
+    </label>
+    <div id="successInfo">Upload Successfully!</div>
+    <div id="failInfo">Upload Failed!</div>
+    <div id="mask">
+        <div id="stopBtn" onmousedown="stopUpload()"></div>
+    </div>
+    <script>
+        const BLOCK_SIZE = 100 * 1024;
+
+        let uploadStreamSubscription = null,
+            fileSelector = document.querySelector('#fileSelector'),
+            progressBar = document.querySelector('#progressBar'),
+            successInfo = document.querySelector('#successInfo'),
+            failInfo = document.querySelector('#failInfo');
+
+        function fileDropHandler(e) {
+            if (e.dataTransfer.files) {
+                fileSelector.files = e.dataTransfer.files;
+                e.preventDefault();
+            }
+        }
+
+        function fileDragOverHandler(e) {
+            if (e.dataTransfer.files)
+                e.preventDefault();
+        }
+
+        function stopUpload() {
+            if (uploadStreamSubscription != null) {
+                uploadStreamSubscription.unsubscribe();
+                updateProgress(0);
+                destroy();
+            }
+        }
+
+        fileSelector.addEventListener('change', () => {
+            if (fileSelector.files != null && fileSelector.files.length) {
+                uploadBeginHandler();
+                let files = Array.prototype.slice.call(fileSelector.files);
+                uploadStreamSubscription = startUpload(files);
+            }
+        });
+
+        function uploadBeginHandler() {
+            document.body.classList.add('uploading');
+            fileSelector.setAttribute('disabled', true);
+            updateProgress(0);
+        }
+
+        function updateProgress(progress) {
+            progressBar.style.height = progress.toFixed(0) + '%';
+        }
+
+        function uploadFailedHandler(e) {
+            destroy();
+
+            failInfo.classList.add('show');
+            setTimeout(() => failInfo.classList.remove('show'), 1500);
+        }
+
+        function uploadSucceedHandler() {
+            updateProgress(100);
+            destroy();
+
+            successInfo.classList.add('show');
+            setTimeout(() => successInfo.classList.remove('show'), 1500);
+        }
+
+        function destroy() {
+            uploadStreamSubscription = null;
+            fileSelector.removeAttribute('disabled');
+            fileSelector.value = null;
+            document.body.classList.remove('uploading');
+        }
+
+        function startUpload(files) {
+            let totalBytes = 0;
+            files.forEach(f => totalBytes += f.size);
+
+            return Rx.Observable.from(files).concatMap(file => {
+                let index = files.indexOf(file);
+                let bytesBegin = 0;
+                files.slice(0, index).forEach(f => bytesBegin += f.size);
+                return getSingleFileUploadStream(file, bytesBegin, totalBytes);
+            }).subscribe(updateProgress, uploadFailedHandler, uploadSucceedHandler);
+        }
+
+        function getSingleFileUploadStream(file, bytesBegin, totalBytes) {
+            let bytes$ = Rx.Observable.create(observer => {
+                let fileReader = new FileReader();
+                fileReader.addEventListener('load', () => {
+                    observer.next(new Uint8Array(fileReader.result));
+                    observer.complete();
+                });
+                fileReader.readAsArrayBuffer(file);
+            }).share();
+
+            let uploadIndex$ = Rx.Observable.fromPromise(
+                fetch(`uploadService/checkFile/${encodeURIComponent(file.name)}`, {
+                    method: 'POST'
+                }).then(res => res.text()).then(index => parseInt(index))
+            )
+                .filter(uploadedSize => uploadedSize < file.size)
+                .delayWhen(() => bytes$)
+                .switchMap(uploadedSize => {
+                    let arr = [];
+                    while (uploadedSize < file.size) {
+                        arr.push(uploadedSize);
+                        uploadedSize += BLOCK_SIZE;
+                    }
+                    return Rx.Observable.from(arr);
+                });
+
+            return uploadIndex$
+                .combineLatest(bytes$, (index, bytes) => {
+                    return {
+                        pos: index,
+                        bytes: bytes
+                    };
+                })
+                .concatMap(obj => {
+                    let pos = obj.pos,
+                        bytes = obj.bytes,
+                        endIndex = Math.min(pos + BLOCK_SIZE, bytes.length),
+                        headers = new Headers();
+                    headers.append('Content-Type', 'octet-stream');
+                    return Rx.Observable.fromPromise(
+                        fetch(`uploadService/breakpointUpload/${encodeURIComponent(file.name)}?index=${pos}`, {
+                            method: 'POST',
+                            headers: headers,
+                            body: bytes.slice(pos, endIndex)
+                        })
+                            .then(res => res.text())
+                            .then(size => (bytesBegin + parseInt(size)) / totalBytes * 100)
+                    );
+                });
+        }
+    </script>
+</body>
+
+</html>
