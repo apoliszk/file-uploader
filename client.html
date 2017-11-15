@@ -216,6 +216,8 @@
         }
 
         function getSingleFileUploadStream(file, bytesBegin, totalBytes) {
+            let bytes = null;
+
             let bytes$ = Rx.Observable.create(observer => {
                 let fileReader = new FileReader();
                 fileReader.addEventListener('load', () => {
@@ -223,7 +225,7 @@
                     observer.complete();
                 });
                 fileReader.readAsArrayBuffer(file);
-            }).share();
+            }).do(x => bytes = x);
 
             let uploadIndex$ = Rx.Observable.fromPromise(
                 fetch(`uploadService/checkFile/${encodeURIComponent(file.name)}`, {
@@ -242,16 +244,8 @@
                 });
 
             return uploadIndex$
-                .combineLatest(bytes$, (index, bytes) => {
-                    return {
-                        pos: index,
-                        bytes: bytes
-                    };
-                })
-                .concatMap(obj => {
-                    let pos = obj.pos,
-                        bytes = obj.bytes,
-                        endIndex = Math.min(pos + BLOCK_SIZE, bytes.length),
+                .concatMap(pos => {
+                    let endIndex = Math.min(pos + BLOCK_SIZE, bytes.length),
                         headers = new Headers();
                     headers.append('Content-Type', 'octet-stream');
                     return Rx.Observable.fromPromise(
