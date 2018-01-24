@@ -13,6 +13,13 @@
             margin: 0;
         }
 
+        #breakPointSwitch {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            padding-top: 1em;
+        }
+
         #fileInputLabel {
             display: block;
             width: 80%;
@@ -124,6 +131,9 @@
 </head>
 
 <body>
+    <label id="breakPointSwitch">
+        <input type="checkbox">Break Point Upload
+    </label>
     <label id="fileInputLabel" ondragover="fileDragOverHandler(event)" ondrop="fileDropHandler(event)">
         <input id="fileSelector" type="file" multiple>
         <div id="progressBar"></div>
@@ -139,6 +149,7 @@
 
         let uploadStreamSubscription = null,
             fileSelector = document.querySelector('#fileSelector'),
+            breakPointSwitch = document.querySelector('#breakPointSwitch>input'),
             progressBar = document.querySelector('#progressBar'),
             successInfo = document.querySelector('#successInfo'),
             failInfo = document.querySelector('#failInfo');
@@ -228,9 +239,14 @@
             }).do(x => bytes = x);
 
             let uploadIndex$ = Rx.Observable.fromPromise(
-                fetch(`uploadService/checkFile/${encodeURIComponent(file.name)}`, {
-                    method: 'POST'
-                }).then(res => res.text()).then(index => parseInt(index))
+                breakPointSwitch.checked ?
+                    fetch(`uploadService/checkFile/${encodeURIComponent(file.name)}`, {
+                        method: 'POST'
+                    }).then(res => res.text()).then(index => parseInt(index))
+                    :
+                    fetch(`uploadService/deleteFile/${encodeURIComponent(file.name)}`, {
+                        method: 'POST'
+                    }).then(res => 0)
             )
                 .filter(uploadedSize => uploadedSize < file.size)
                 .delayWhen(() => bytes$)
