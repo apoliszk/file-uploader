@@ -227,16 +227,7 @@
         }
 
         function getSingleFileUploadStream(file, bytesBegin, totalBytes) {
-            let bytes = null;
-
-            let bytes$ = Rx.Observable.create(observer => {
-                let fileReader = new FileReader();
-                fileReader.addEventListener('load', () => {
-                    observer.next(new Uint8Array(fileReader.result));
-                    observer.complete();
-                });
-                fileReader.readAsArrayBuffer(file);
-            }).do(x => bytes = x);
+            let fileReader = new FileReader();
 
             let uploadIndex$ = Rx.Observable.fromPromise(
                 breakPointSwitch.checked ?
@@ -249,7 +240,6 @@
                     }).then(res => 0)
             )
                 .filter(uploadedSize => uploadedSize < file.size)
-                .delayWhen(() => bytes$)
                 .switchMap(uploadedSize => {
                     let arr = [];
                     while (uploadedSize < file.size) {
@@ -261,18 +251,24 @@
 
             return uploadIndex$
                 .concatMap(pos => {
-                    let endIndex = Math.min(pos + BLOCK_SIZE, bytes.length),
+                    let endIndex = Math.min(pos + BLOCK_SIZE, file.size),
                         headers = new Headers();
                     headers.append('Content-Type', 'octet-stream');
-                    return Rx.Observable.fromPromise(
+                    return Rx.Observable.create(observer => {
+                        fileReader.onload = () => {
+                            observer.next(fileReader.result);
+                            observer.complete();
+                        };
+                        fileReader.readAsArrayBuffer(file.slice(pos, endIndex));
+                    }).switchMap(bytes => Rx.Observable.fromPromise(
                         fetch(`uploadService/breakpointUpload/${encodeURIComponent(file.name)}?index=${pos}`, {
                             method: 'POST',
                             headers: headers,
-                            body: bytes.slice(pos, endIndex)
+                            body: bytes
                         })
                             .then(res => res.text())
                             .then(size => (bytesBegin + parseInt(size)) / totalBytes * 100)
-                    );
+                    ));
                 });
         }
     </script>
